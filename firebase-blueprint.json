@@ -1,0 +1,387 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Administrator user profile and role record.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200,
+          "description": "Verified administrator email address."
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Display name of the administrator."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin"],
+          "maxLength": 20,
+          "description": "Access control role."
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "ISO timestamp of last update."
+        }
+      },
+      "required": ["email", "displayName", "role", "updatedAt"]
+    },
+    "Blog": {
+      "title": "Blog",
+      "description": "Weekly computer science learning blog article.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 200,
+          "description": "Article headline."
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 160,
+          "pattern": "^[a-z0-9\\-]+$",
+          "description": "URL-safe unique identifier."
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Editorial subtitle."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 600,
+          "description": "Short summary for cards and SEO meta description."
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 80000,
+          "description": "Full Markdown article content including code blocks and diagrams."
+        },
+        "week": {
+          "type": "number",
+          "description": "Week number in the learning journal."
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Primary CS category name."
+        },
+        "tags": {
+          "type": "array",
+          "description": "Topic tags (up to 10)."
+        },
+        "coverImage": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Cover artwork identifier or URL."
+        },
+        "publicationDate": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "ISO date string."
+        },
+        "readingTime": {
+          "type": "number",
+          "description": "Estimated reading time in minutes."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["published", "draft"],
+          "maxLength": 20,
+          "description": "Publication state."
+        },
+        "featured": {
+          "type": "boolean",
+          "description": "Whether featured on homepage and blog index."
+        },
+        "isSample": {
+          "type": "boolean",
+          "description": "Marks initial replaceable sample educational content."
+        },
+        "keyTakeaways": {
+          "type": "array",
+          "description": "Bullet list of key learning takeaways."
+        },
+        "authorName": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Author display name."
+        },
+        "authorId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "UID of the administrator who created/updated the post."
+        }
+      },
+      "required": [
+        "title",
+        "slug",
+        "subtitle",
+        "description",
+        "content",
+        "week",
+        "category",
+        "tags",
+        "coverImage",
+        "publicationDate",
+        "readingTime",
+        "status",
+        "featured",
+        "isSample",
+        "keyTakeaways",
+        "authorName",
+        "authorId"
+      ]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Computer science topic category.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 100,
+          "description": "Category display title."
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 100,
+          "description": "URL-friendly slug."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Category overview."
+        },
+        "icon": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "Lucide icon identifier."
+        }
+      },
+      "required": ["name", "slug", "description", "icon"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Student computer science project showcase item.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 150,
+          "description": "Project title."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Project summary and architecture notes."
+        },
+        "technologies": {
+          "type": "array",
+          "description": "List of programming languages and tools used."
+        },
+        "coverImage": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Cover visual key or URL."
+        },
+        "githubUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "GitHub repository link or placeholder."
+        },
+        "demoUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Live demo link or placeholder."
+        },
+        "isDemo": {
+          "type": "boolean",
+          "description": "Indicates editable demo project."
+        }
+      },
+      "required": ["name", "description", "technologies", "coverImage", "githubUrl", "demoUrl", "isDemo"]
+    },
+    "Profile": {
+      "title": "Profile",
+      "description": "Author About Me profile and social links.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Student name or placeholder."
+        },
+        "roleTitle": {
+          "type": "string",
+          "maxLength": 160,
+          "description": "Academic role headline."
+        },
+        "introduction": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Personal introduction paragraph."
+        },
+        "education": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Educational background details."
+        },
+        "learningPhilosophy": {
+          "type": "string",
+          "maxLength": 1500,
+          "description": "Philosophy on learning in public."
+        },
+        "interests": {
+          "type": "array",
+          "description": "List of CS learning interests."
+        },
+        "skills": {
+          "type": "array",
+          "description": "Technologies currently being explored."
+        },
+        "goals": {
+          "type": "array",
+          "description": "Current academic and engineering goals."
+        },
+        "githubUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "GitHub profile URL."
+        },
+        "linkedinUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "LinkedIn profile URL."
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Public contact email placeholder."
+        }
+      },
+      "required": [
+        "name",
+        "roleTitle",
+        "introduction",
+        "education",
+        "learningPhilosophy",
+        "interests",
+        "skills",
+        "goals",
+        "githubUrl",
+        "linkedinUrl",
+        "email"
+      ]
+    },
+    "Subscriber": {
+      "title": "Subscriber",
+      "description": "Newsletter subscription record.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 200,
+          "description": "Subscriber email address."
+        },
+        "subscriptionDate": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "ISO date of subscription."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "unsubscribed"],
+          "maxLength": 20,
+          "description": "Subscription status."
+        }
+      },
+      "required": ["email", "subscriptionDate", "status"]
+    },
+    "ContactMessage": {
+      "title": "ContactMessage",
+      "description": "Message submitted via the Contact page.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120,
+          "description": "Sender name."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 200,
+          "description": "Sender email."
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 200,
+          "description": "Message subject."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 4000,
+          "description": "Message body."
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "ISO submission timestamp."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["unread", "read"],
+          "maxLength": 20,
+          "description": "Read status."
+        }
+      },
+      "required": ["name", "email", "subject", "message", "createdAt", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Admin user profiles."
+    },
+    "/blogs/{blogId}": {
+      "schema": { "$ref": "#/entities/Blog" },
+      "description": "Weekly learning blog articles."
+    },
+    "/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "Educational topic categories."
+    },
+    "/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "Student CS projects showcase."
+    },
+    "/profile/{profileId}": {
+      "schema": { "$ref": "#/entities/Profile" },
+      "description": "Personal About Me profile."
+    },
+    "/subscribers/{subscriberId}": {
+      "schema": { "$ref": "#/entities/Subscriber" },
+      "description": "Newsletter email subscribers."
+    },
+    "/contact_messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ContactMessage" },
+      "description": "Contact form submissions."
+    }
+  }
+}

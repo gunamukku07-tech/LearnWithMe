@@ -1,0 +1,232 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-main: #FFF8EF;
+    --bg-secondary: #F9EFE8;
+    --bg-pink: #F7DDE1;
+    --accent-rose: #D9A5A5;
+    --accent-brown: #D9BFA9;
+    --surface-beige: #EADCCB;
+    --text-heading: #594438;
+    --text-body: #887467;
+    --surface-card: #FFFFFF;
+    --border-warm: #EDE0D5;
+  }
+
+  html, body {
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: #FFF8EF;
+    color: #887467;
+    scroll-behavior: smooth;
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  h1, .font-display {
+    font-family: 'Playfair Display', Georgia, serif;
+    color: #594438;
+    text-wrap: balance;
+  }
+
+  h2, h3, .font-serif-section {
+    font-family: 'DM Serif Display', Georgia, serif;
+    color: #594438;
+    text-wrap: balance;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Subtle warm paper texture overlay */
+.bg-paper-texture {
+  background-image: radial-gradient(rgba(89, 68, 56, 0.035) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
+/* Hide scrollbar for mobile horizontal swipe strips */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Safe area padding for phones with home indicator */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Hardware-accelerated page & section entry animations (never gets stuck invisible) */
+@keyframes editorial-page-fade {
+  0% {
+    opacity: 0.01;
+    transform: translate3d(0, 8px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes editorial-float-slow {
+  0%, 100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -6px, 0);
+  }
+}
+
+@keyframes editorial-float-card-bg {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) rotate(-2deg);
+  }
+  50% {
+    transform: translate3d(0, -5px, 0) rotate(-1deg);
+  }
+}
+
+@keyframes editorial-stroke-draw {
+  0% {
+    transform: scaleX(0);
+  }
+  100% {
+    transform: scaleX(1);
+  }
+}
+
+.editorial-page-enter {
+  animation: editorial-page-fade 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+.editorial-float {
+  animation: editorial-float-slow 7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  will-change: transform;
+}
+
+.editorial-float-bg {
+  animation: editorial-float-card-bg 6.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  will-change: transform;
+}
+
+.editorial-underline-draw {
+  transform-origin: left center;
+  animation: editorial-stroke-draw 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+}
+
+/* Subtle SVG data-flow & breathing animations for EditorialArtwork & Hero */
+@keyframes editorial-dash-flow {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+
+@keyframes editorial-orb-float {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -5px, 0) scale(1.03);
+  }
+}
+
+@keyframes editorial-bar-breathe {
+  0%, 100% {
+    transform: scaleX(0.75);
+  }
+  50% {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes editorial-node-pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.09);
+  }
+}
+
+.svg-flow-line {
+  stroke-dasharray: 5 4;
+  animation: editorial-dash-flow 3.2s linear infinite;
+}
+
+.svg-float-orb {
+  transform-box: fill-box;
+  transform-origin: center;
+  will-change: transform;
+  animation: editorial-orb-float 6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.svg-scale-bar {
+  transform-box: fill-box;
+  transform-origin: left center;
+  will-change: transform;
+  animation: editorial-bar-breathe 5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.svg-pulse-node {
+  transform-box: fill-box;
+  transform-origin: center;
+  will-change: transform;
+  animation: editorial-node-pulse 3.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+/* Editorial scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #FFF8EF;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D9BFA9;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #D9A5A5;
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  html.study-cursor-active,
+  html.study-cursor-active body,
+  html.study-cursor-active a,
+  html.study-cursor-active button,
+  html.study-cursor-active [role="button"],
+  html.study-cursor-active label,
+  html.study-cursor-active select {
+    cursor: none;
+  }
+
+  /* Preserve standard I-beam text selection behavior on inputs & editable text areas */
+  html.study-cursor-active input[type="text"],
+  html.study-cursor-active input[type="email"],
+  html.study-cursor-active input[type="search"],
+  html.study-cursor-active input[type="url"],
+  html.study-cursor-active input[type="number"],
+  html.study-cursor-active textarea,
+  html.study-cursor-active [contenteditable="true"] {
+    cursor: text;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
