@@ -30,13 +30,18 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope('email');
+googleProvider.addScope('profile');
 googleProvider.setCustomParameters({
   prompt: 'select_account',
 });
 
 // Configure local persistence once at startup so click handlers remain synchronous
 // and preserve browser user-gesture activation for popup/redirect flows.
-setPersistence(auth, browserLocalPersistence).catch((err) => {
+export const persistenceReadyPromise: Promise<void> = setPersistence(
+  auth,
+  browserLocalPersistence
+).catch((err) => {
   console.warn('Could not set auth persistence:', err);
 });
 
@@ -53,6 +58,42 @@ export const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || 'guna.chinnu07@gm
 
 export function isAuthorizedAdminEmail(email: string | null | undefined): boolean {
   return Boolean(email && email.trim().toLowerCase() === ADMIN_EMAIL.trim().toLowerCase());
+}
+
+export function getUserEmail(
+  user:
+    | {
+        email?: string | null;
+        providerData?: { email?: string | null }[];
+      }
+    | null
+    | undefined
+): string | null {
+  if (!user) return null;
+  if (user.email && user.email.trim()) {
+    return user.email.trim();
+  }
+  const providerWithEmail = user.providerData?.find((p) => p?.email && p.email.trim());
+  return providerWithEmail?.email?.trim() || null;
+}
+
+export function isAuthorizedAdminUser(
+  user:
+    | {
+        email?: string | null;
+        emailVerified?: boolean;
+        providerData?: { email?: string | null; providerId?: string | null }[];
+      }
+    | null
+    | undefined
+): boolean {
+  if (!user) return false;
+  const email = getUserEmail(user);
+  const isGoogleProvider = Boolean(
+    user.providerData?.some((p) => p?.providerId === 'google.com')
+  );
+  const isVerified = Boolean(user.emailVerified !== false || isGoogleProvider);
+  return isVerified && isAuthorizedAdminEmail(email);
 }
 
 export function isTokenServiceDisabledError(error: unknown): boolean {

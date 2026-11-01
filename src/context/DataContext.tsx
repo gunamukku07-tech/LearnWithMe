@@ -23,10 +23,13 @@ import {
   db,
   googleProvider,
   ADMIN_EMAIL,
+  getUserEmail,
   isAuthorizedAdminEmail,
+  isAuthorizedAdminUser,
   isRunningInIframe,
   isTokenServiceDisabledError,
   formatAuthErrorMessage,
+  persistenceReadyPromise,
   OperationType,
   handleFirestoreError,
 } from '../firebase';
@@ -92,7 +95,7 @@ const REDIRECT_PENDING_KEY = 'learnwithme_auth_redirect_pending_v1';
 let sharedRedirectResultPromise: Promise<UserCredential | null> | null = null;
 function consumeRedirectResultOnce(): Promise<UserCredential | null> {
   if (!sharedRedirectResultPromise) {
-    sharedRedirectResultPromise = getRedirectResult(auth);
+    sharedRedirectResultPromise = persistenceReadyPromise.then(() => getRedirectResult(auth));
   }
   return sharedRedirectResultPromise;
 }
@@ -271,10 +274,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
-  // Strict administrator verification: Only Guna Sekhar's authorized administrator account can access admin controls
-  const isVerifiedCloudAdmin = Boolean(
-    user && user.emailVerified && isAuthorizedAdminEmail(user.email)
-  );
+  // Strict administrator verification: Only the authorized administrator account can access admin controls
+  const isVerifiedCloudAdmin = isAuthorizedAdminUser(user);
 
   const isAdmin = isVerifiedCloudAdmin;
 
@@ -395,37 +396,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      // Ensure the Firebase Token Service API can issue/refresh a valid ID token before
-      // setting the user or allowing Firestore to attach the token to requests.
-      try {
-        await currentUser.getIdToken();
-      } catch (tokenErr) {
-        clearPendingFlag();
-        const formatted = formatAuthErrorMessage(tokenErr);
-        if (isMounted) {
-          setUser(null);
-          setAuthError(formatted.message);
-          setIsSigningIn(false);
-          signingInRef.current = false;
-        }
-        notifyAuthOnce(
-          `token-err-${formatted.title}`,
-          formatted.title,
-          formatted.message,
-          'error'
-        );
-        try {
-          await signOut(auth);
-        } catch {
-          // ignore signOut errors
-        }
-        return;
-      }
-
-      if (currentUser.emailVerified && isAuthorizedAdminEmail(currentUser.email)) {
+      if (isAuthorizedAdminUser(currentUser)) {
+        // Immediately grant Admin Dashboard access once the authorized admin account is verified
         if (isMounted) {
           setUser(currentUser);
           setAuthError(null);
+          setAuthLoading(false);
+          setIsSigningIn(false);
+          signingInRef.current = false;
         }
 
         if (fromRedirectResult || hadPendingRedirect()) {
@@ -439,10 +417,32 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         try {
+          await currentUser.getIdToken();
+        } catch (tokenErr) {
+          if (isTokenServiceDisabledError(tokenErr)) {
+            clearPendingFlag();
+            const formatted = formatAuthErrorMessage(tokenErr);
+            if (isMounted) {
+              setUser(null);
+              setAuthError(formatted.message);
+            }
+            notifyAuthOnce(
+              `token-err-${formatted.title}`,
+              formatted.title,
+              formatted.message,
+              'error'
+            );
+            await signOut(auth).catch(() => {});
+          }
+          return;
+        }
+
+        try {
+          const resolvedEmail = getUserEmail(currentUser) || ADMIN_EMAIL;
           await setDoc(
             doc(db, 'users', currentUser.uid),
             {
-              email: (currentUser.email || ADMIN_EMAIL).slice(0, 200),
+              email: resolvedEmail.slice(0, 200),
               displayName: (currentUser.displayName || 'Guna Sekhar').slice(0, 120),
               role: 'admin',
               updatedAt: new Date().toISOString(),
@@ -454,11 +454,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } else {
         // Unauthorized Google account or unverified email: enforce strict admin restriction
-        const attemptedKey = (currentUser.email || 'unauthorized').toLowerCase();
+        const attemptedKey = (getUserEmail(currentUser) || 'unauthorized').toLowerCase();
         clearPendingFlag();
-        const unauthorizedMessage = !currentUser.emailVerified
-          ? 'This Google account does not have a verified email address. Please sign in with your verified authorized administrator Google account.'
-          : 'Access denied. Only the authorized administrator Google account is allowed to access the LearnWithMe Admin Studio.';
+        const unauthorizedMessage =
+          currentUser.emailVerified === false
+            ? 'This Google account does not have a verified email address. Please sign in with your verified authorized administrator Google account.'
+            : 'Access denied. Only the authorized administrator Google account is allowed to access the LearnWithMe Admin Studio.';
 
         if (isMounted) {
           setUser(null);
@@ -487,8 +488,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .then(async (result) => {
         if (result?.user) {
           await verifyAndHandleUser(result.user, true);
+          return;
+        }
+        await auth.authStateReady();
+        if (auth.currentUser) {
+          await verifyAndHandleUser(auth.currentUser, hadPendingRedirect());
         } else if (hadPendingRedirect()) {
           clearPendingFlag();
+          const redirectBlockedMsg =
+            'Full-page redirect sign-in could not restore your session because your browser blocked cross-domain authentication storage. Please click "Sign In with Google (Authorized Admin Only)" below to sign in directly.';
+          if (isMounted) {
+            setAuthError(redirectBlockedMsg);
+          }
         }
       })
       .catch((error) => {
@@ -813,16 +824,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    // On top-level deployments (such as Vercel or a standalone browser tab),
-    // use full-page signInWithRedirect() so popup blockers never interfere.
-    if (!isRunningInIframe()) {
-      await signInAdminWithRedirect();
-      return;
-    }
-
-    // Inside an embedded preview iframe (where accounts.google.com forbids iframe redirects
-    // via X-Frame-Options: DENY), invoke signInWithPopup synchronously on the click gesture
-    // with zero preceding awaits so the browser preserves user activation.
+    // Invoke signInWithPopup synchronously on the click gesture with zero preceding awaits
+    // so both standalone deployments (Vercel / Cloud Run) and embedded previews authenticate
+    // immediately without cross-domain redirect storage partitioning losing the session.
     signingInRef.current = true;
     setIsSigningIn(true);
     setAuthError(null);
@@ -830,16 +834,50 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const credential = await signInWithPopup(auth, googleProvider);
       if (credential?.user) {
-        await credential.user.getIdToken();
-        if (credential.user.emailVerified && isAuthorizedAdminEmail(credential.user.email)) {
+        if (isAuthorizedAdminUser(credential.user)) {
           setUser(credential.user);
           setAuthError(null);
+          setAuthLoading(false);
+          setIsSigningIn(false);
+          signingInRef.current = false;
           notifyAuthOnce(
             `signin-success-${credential.user.uid}`,
             'Signed in successfully',
             'Authenticated with your authorized administrator Google account.',
             'success'
           );
+          try {
+            const resolvedEmail = getUserEmail(credential.user) || ADMIN_EMAIL;
+            await setDoc(
+              doc(db, 'users', credential.user.uid),
+              {
+                email: resolvedEmail.slice(0, 200),
+                displayName: (credential.user.displayName || 'Guna Sekhar').slice(0, 120),
+                role: 'admin',
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            );
+          } catch (err) {
+            console.warn('Could not sync user record:', err);
+          }
+          return;
+        } else {
+          const attemptedKey = (getUserEmail(credential.user) || 'unauthorized').toLowerCase();
+          const unauthorizedMessage =
+            'Access denied. Only the authorized administrator Google account is allowed to access the LearnWithMe Admin Studio.';
+          setUser(null);
+          setAuthError(unauthorizedMessage);
+          setIsSigningIn(false);
+          signingInRef.current = false;
+          notifyAuthOnce(
+            `unauthorized-${attemptedKey}`,
+            'Unauthorized Account',
+            unauthorizedMessage,
+            'error'
+          );
+          await signOut(auth).catch(() => {});
+          return;
         }
       }
       signingInRef.current = false;
@@ -847,6 +885,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
       signingInRef.current = false;
       setIsSigningIn(false);
+
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? String((error as { code?: unknown }).code || '')
+          : '';
+      const rawMessage = error instanceof Error ? error.message : String(error || '');
+
+      // If a browser popup blocker prevented the popup in a standalone tab, fall back to redirect
+      if (
+        (code === 'auth/popup-blocked' || rawMessage.includes('auth/popup-blocked')) &&
+        !isRunningInIframe()
+      ) {
+        await signInAdminWithRedirect();
+        return;
+      }
 
       if (isTokenServiceDisabledError(error)) {
         await signOut(auth).catch(() => {});

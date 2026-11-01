@@ -36,8 +36,7 @@ import { EditorialArtwork } from '../components/EditorialArtwork';
 import { SEOHead } from '../components/SEOHead';
 import { ProfilePhotoPlaceholder } from '../components/ProfilePhotoPlaceholder';
 import {
-  isAuthorizedAdminEmail,
-  isRunningInIframe,
+  isAuthorizedAdminUser,
   uploadCoverImageToStorage,
 } from '../firebase';
 
@@ -188,7 +187,7 @@ export const AdminDashboardPage: React.FC = () => {
 
     setUploadingCover(true);
     try {
-      if (user && isAuthorizedAdminEmail(user.email)) {
+      if (isAuthorizedAdminUser(user)) {
         const downloadUrl = await uploadCoverImageToStorage(file);
         setCoverImage(downloadUrl);
         addToast('Uploaded to Firebase Storage', 'Cover image stored in Firebase Storage.');
@@ -293,8 +292,7 @@ export const AdminDashboardPage: React.FC = () => {
               LearnWithMe Admin Studio
             </h1>
             <p className="text-sm text-[#887467] leading-relaxed">
-              Sign in with your authorized administrator Google account to manage and publish weekly
-              articles, categories, projects, and profile details.
+              Sign in with your authorized administrator Google account to manage your website.
             </p>
           </div>
 
@@ -341,29 +339,20 @@ export const AdminDashboardPage: React.FC = () => {
                 <span>Sign In with Google (Authorized Admin Only)</span>
               )}
             </button>
-            {isRunningInIframe() ? (
-              <div className="pt-1 space-y-1.5">
-                <a
-                  href={typeof window !== 'undefined' ? window.location.href : '/admin'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center gap-1.5 text-xs font-medium text-[#594438] underline hover:text-[#887467] transition-colors"
-                >
-                  <span>Open Admin Portal in New Tab (Full-Page Redirect Sign-In)</span>
-                  <ArrowUpRight className="w-3.5 h-3.5" />
-                </a>
-                <p className="text-[11px] text-[#887467]">
-                  Opening in a full browser tab enables popup-free Google Redirect Sign-In.
-                </p>
-              </div>
-            ) : (
-              <p className="text-[11px] text-[#887467]">
-                Uses secure full-page Google Redirect Sign-In (no popups required).
-              </p>
-            )}
+            <div className="pt-1 space-y-1.5">
+              <a
+                href={typeof window !== 'undefined' ? window.location.href : '/admin'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-1.5 text-xs font-medium text-[#594438] underline hover:text-[#887467] transition-colors"
+              >
+                <span>Open Admin Portal in New Tab (Full-Page Redirect Sign-In)</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </a>
+            </div>
           </div>
 
-          {user && !isAuthorizedAdminEmail(user.email) && (
+          {user && !isAuthorizedAdminUser(user) && (
             <div className="space-y-2 text-xs text-[#594438] bg-[#F7DDE1]/60 p-4 rounded-xl border border-[#D9A5A5]">
               <p className="font-medium">
                 Access is restricted exclusively to the authorized administrator Google account.
