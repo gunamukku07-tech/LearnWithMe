@@ -295,7 +295,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (
         currentUser &&
         currentUser.emailVerified &&
-        currentUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()
+        currentUser.email &&
+        currentUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
       ) {
         try {
           await setDoc(
