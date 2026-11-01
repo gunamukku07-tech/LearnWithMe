@@ -45,15 +45,21 @@ When you are ready to deploy from your terminal:
 
 ---
 
-## 3. Pre-Launch Checklist in Firebase Console
+## 3. Pre-Launch Checklist in Firebase Console (Firebase Hosting & Vercel)
 
-1. **Authorized Domains for Google Sign-In**:
+1. **Authorized Domains for Google Redirect Sign-In (`signInWithRedirect`)**:
    - Open [Firebase Console → Authentication → Settings → Authorized domains](https://console.firebase.google.com/project/tranquil-bazaar-xt86m/authentication/settings).
-   - Ensure `tranquil-bazaar-xt86m.web.app` and `tranquil-bazaar-xt86m.firebaseapp.com` (plus any custom domain you connect) are listed so Google Sign-In works on your live site.
-2. **Firestore Security Rules (`/firestore.rules`)**:
+   - Ensure the following domains are listed under **Authorized domains**:
+     - Your deployed **Vercel production domain** (e.g., `your-project.vercel.app`) and any custom domain attached to Vercel.
+     - `tranquil-bazaar-xt86m.web.app` and `tranquil-bazaar-xt86m.firebaseapp.com`.
+     - `localhost` (for local development).
+2. **Vercel Auth Helper Proxy (`vercel.json`)**:
+   - `vercel.json` includes rewrites for `/__/auth/:path*` and `/__/firebase/:path*` pointing to `https://tranquil-bazaar-xt86m.firebaseapp.com` before the SPA `/index.html` fallback.
+   - If Safari / Chrome third-party storage partitioning ever blocks cross-domain redirect tokens on your Vercel domain, you can optionally set `VITE_FIREBASE_AUTH_DOMAIN=your-project.vercel.app` in Vercel Environment Variables and add `https://your-project.vercel.app/__/auth/handler` to the Authorized Redirect URIs of your Web Client ID in [Google Cloud Console → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials?project=tranquil-bazaar-xt86m).
+3. **Firestore Security Rules (`/firestore.rules`)**:
    - Bound to your named database `ai-studio-f97b6181-7fd1-468f-a454-dcdf3e341a95` in `firebase.json`.
    - Enforces public read access only for published articles (`status == 'published'`) and restricts all write operations to `guna.chinnu07@gmail.com`.
-3. **Firebase Storage Rules (`/storage.rules`)**:
+4. **Firebase Storage Rules (`/storage.rules`)**:
    - Bound in `firebase.json` to `/storage.rules`.
    - Allows public read on `/covers/{imageId}` and restricts uploads (image MIME types up to 5 MB) to `guna.chinnu07@gmail.com`.
 

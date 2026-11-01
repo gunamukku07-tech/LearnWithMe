@@ -24,8 +24,88 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
+  prompt: 'select_account',
+});
 
 export const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || 'guna.chinnu07@gmail.com';
+
+export function isAuthorizedAdminEmail(email: string | null | undefined): boolean {
+  return Boolean(email && email.trim().toLowerCase() === ADMIN_EMAIL.trim().toLowerCase());
+}
+
+export function formatAuthErrorMessage(error: unknown): { title: string; message: string } {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : '';
+  const rawMessage = error instanceof Error ? error.message : String(error || '');
+
+  if (code === 'auth/popup-blocked' || rawMessage.includes('auth/popup-blocked')) {
+    return {
+      title: 'Sign-In Redirecting',
+      message:
+        'Your browser blocked the sign-in popup window. Please use the redirect sign-in flow or allow popups/redirects for this site.',
+    };
+  }
+
+  if (
+    code === 'auth/popup-closed-by-user' ||
+    code === 'auth/cancelled-popup-request' ||
+    code === 'auth/redirect-cancelled-by-user'
+  ) {
+    return {
+      title: 'Sign-In Cancelled',
+      message:
+        'The Google sign-in flow was closed before completion. Click "Sign In with Google" when you are ready to try again.',
+    };
+  }
+
+  if (code === 'auth/redirect-operation-pending') {
+    return {
+      title: 'Sign-In Already in Progress',
+      message: 'A Google sign-in redirect is already in progress. Please wait a moment.',
+    };
+  }
+
+  if (code === 'auth/unauthorized-domain' || rawMessage.includes('auth/unauthorized-domain')) {
+    const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+    return {
+      title: 'Domain Not Authorized in Firebase',
+      message: `The domain "${currentHost}" is not yet added to Firebase Authorized Domains. Add "${currentHost}" in Firebase Console → Authentication → Settings → Authorized domains.`,
+    };
+  }
+
+  if (code === 'auth/network-request-failed' || rawMessage.includes('auth/network-request-failed')) {
+    return {
+      title: 'Network Connection Issue',
+      message:
+        'Could not reach Google Authentication servers. Please check your internet connection and try again.',
+    };
+  }
+
+  if (code === 'auth/user-disabled') {
+    return {
+      title: 'Account Disabled',
+      message: 'This Google account has been disabled in Firebase Authentication.',
+    };
+  }
+
+  if (code === 'auth/operation-not-allowed') {
+    return {
+      title: 'Google Sign-In Not Enabled',
+      message:
+        'Google Sign-In is not enabled in Firebase Console. Enable Google as a Sign-In provider under Authentication → Sign-in method.',
+    };
+  }
+
+  return {
+    title: 'Authentication Error',
+    message:
+      rawMessage.replace(/^Firebase:\s*/i, '').trim() ||
+      'Could not complete Google Sign-In. Please try again.',
+  };
+}
 
 export async function uploadCoverImageToStorage(file: File): Promise<string> {
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');

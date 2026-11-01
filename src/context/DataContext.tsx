@@ -1,8 +1,12 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import {
   User as FirebaseUser,
+  UserCredential,
+  browserLocalPersistence,
+  getRedirectResult,
   onAuthStateChanged,
-  signInWithPopup,
+  setPersistence,
+  signInWithRedirect,
   signOut,
 } from 'firebase/auth';
 import {
@@ -20,6 +24,8 @@ import {
   db,
   googleProvider,
   ADMIN_EMAIL,
+  isAuthorizedAdminEmail,
+  formatAuthErrorMessage,
   OperationType,
   handleFirestoreError,
 } from '../firebase';
@@ -45,6 +51,8 @@ interface DataContextType {
   user: FirebaseUser | null;
   isAdmin: boolean;
   authLoading: boolean;
+  isSigningIn: boolean;
+  authError: string | null;
   dataLoading: boolean;
   blogs: Blog[];
   publishedBlogs: Blog[];
@@ -57,6 +65,7 @@ interface DataContextType {
   toasts: ToastNotification[];
   signInAdmin: () => Promise<void>;
   signOutAdmin: () => Promise<void>;
+  clearAuthError: () => void;
   saveBlog: (blog: Omit<Blog, 'id'> & { id?: string }) => Promise<Blog>;
   deleteBlog: (id: string) => Promise<void>;
   toggleBlogStatus: (id: string) => Promise<void>;
@@ -74,6 +83,17 @@ interface DataContextType {
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
+
+const REDIRECT_PENDING_KEY = 'learnwithme_auth_redirect_pending_v1';
+
+// Module-level singleton promise so React StrictMode double-mounts share the exact same getRedirectResult call
+let sharedRedirectResultPromise: Promise<UserCredential | null> | null = null;
+function consumeRedirectResultOnce(): Promise<UserCredential | null> {
+  if (!sharedRedirectResultPromise) {
+    sharedRedirectResultPromise = getRedirectResult(auth);
+  }
+  return sharedRedirectResultPromise;
+}
 
 const STORAGE_KEYS = {
   BLOGS: 'learnwithme_blogs_v3',
@@ -125,7 +145,20 @@ function sanitizeId(raw: string): string {
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [isSigningIn, setIsSigningIn] = useState(() => {
+    try {
+      return sessionStorage.getItem(REDIRECT_PENDING_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [authError, setAuthError] = useState<string | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
+  const signingInRef = useRef(false);
+  const lastAuthNotificationRef = useRef<{ key: string; timestamp: number }>({
+    key: '',
+    timestamp: 0,
+  });
 
   // Purge legacy localStorage keys that held sample/demo content
   useEffect(() => {
@@ -232,7 +265,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Strict administrator verification: Only Guna Sekhar's authorized administrator account can access admin controls
   const isVerifiedCloudAdmin = Boolean(
-    user && user.emailVerified && user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()
+    user && user.emailVerified && isAuthorizedAdminEmail(user.email)
   );
 
   const isAdmin = isVerifiedCloudAdmin;
@@ -247,6 +280,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4200);
+  };
+
+  const notifyAuthOnce = (
+    key: string,
+    title: string,
+    description: string,
+    type: 'success' | 'error' | 'info'
+  ) => {
+    const now = Date.now();
+    if (
+      lastAuthNotificationRef.current.key === key &&
+      now - lastAuthNotificationRef.current.timestamp < 5000
+    ) {
+      return;
+    }
+    lastAuthNotificationRef.current = { key, timestamp: now };
+    addToast(title, description, type);
+  };
+
+  const clearAuthError = () => {
+    setAuthError(null);
   };
 
   const removeToast = (id: string) => {
@@ -286,23 +340,68 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [profile]);
 
-  // Listen to Auth state
+  // Listen to Auth state and resolve Google Sign-In redirect result
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      setAuthLoading(false);
+    let isMounted = true;
+    let authStateSettled = false;
+    let redirectSettled = false;
 
-      if (
-        currentUser &&
-        currentUser.emailVerified &&
-        currentUser.email &&
-        currentUser.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
-      ) {
+    const clearPendingFlag = () => {
+      try {
+        sessionStorage.removeItem(REDIRECT_PENDING_KEY);
+      } catch {
+        // ignore storage errors
+      }
+    };
+
+    const hadPendingRedirect = () => {
+      try {
+        return sessionStorage.getItem(REDIRECT_PENDING_KEY) === '1';
+      } catch {
+        return false;
+      }
+    };
+
+    const markReadyIfBothSettled = () => {
+      if (isMounted && authStateSettled && redirectSettled) {
+        setAuthLoading(false);
+        setIsSigningIn(false);
+        signingInRef.current = false;
+      }
+    };
+
+    const verifyAndHandleUser = async (
+      currentUser: FirebaseUser | null,
+      fromRedirectResult = false
+    ) => {
+      if (!currentUser) {
+        if (isMounted && !fromRedirectResult) {
+          setUser(null);
+        }
+        return;
+      }
+
+      if (currentUser.emailVerified && isAuthorizedAdminEmail(currentUser.email)) {
+        if (isMounted) {
+          setUser(currentUser);
+          setAuthError(null);
+        }
+
+        if (fromRedirectResult || hadPendingRedirect()) {
+          clearPendingFlag();
+          notifyAuthOnce(
+            `signin-success-${currentUser.uid}`,
+            'Signed in successfully',
+            `Authenticated as ${currentUser.email}.`,
+            'success'
+          );
+        }
+
         try {
           await setDoc(
             doc(db, 'users', currentUser.uid),
             {
-              email: currentUser.email.slice(0, 200),
+              email: (currentUser.email || ADMIN_EMAIL).slice(0, 200),
               displayName: (currentUser.displayName || 'Guna Sekhar').slice(0, 120),
               role: 'admin',
               updatedAt: new Date().toISOString(),
@@ -312,9 +411,76 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (err) {
           console.warn('Could not sync user record:', err);
         }
+      } else {
+        // Unauthorized Google account or unverified email: enforce strict admin restriction
+        const attemptedEmail = currentUser.email || 'this Google account';
+        clearPendingFlag();
+        const unauthorizedMessage = !currentUser.emailVerified
+          ? `The Google account (${attemptedEmail}) does not have a verified email address. Please sign in with verified administrator account ${ADMIN_EMAIL}.`
+          : `Access denied for ${attemptedEmail}. Only the authorized administrator (${ADMIN_EMAIL}) is allowed to access the LearnWithMe Admin Studio.`;
+
+        if (isMounted) {
+          setUser(null);
+          setAuthError(unauthorizedMessage);
+          setIsSigningIn(false);
+          signingInRef.current = false;
+        }
+
+        notifyAuthOnce(
+          `unauthorized-${attemptedEmail.toLowerCase()}`,
+          'Unauthorized Account',
+          unauthorizedMessage,
+          'error'
+        );
+
+        try {
+          await signOut(auth);
+        } catch (signOutErr) {
+          console.warn('Error signing out unauthorized account:', signOutErr);
+        }
       }
+    };
+
+    // 1. Handle redirect result from signInWithRedirect()
+    consumeRedirectResultOnce()
+      .then(async (result) => {
+        if (result?.user) {
+          await verifyAndHandleUser(result.user, true);
+        } else if (hadPendingRedirect()) {
+          clearPendingFlag();
+        }
+      })
+      .catch((error) => {
+        clearPendingFlag();
+        const formatted = formatAuthErrorMessage(error);
+        if (isMounted) {
+          setAuthError(formatted.message);
+          setIsSigningIn(false);
+          signingInRef.current = false;
+        }
+        notifyAuthOnce(
+          `redirect-err-${formatted.title}-${formatted.message}`,
+          formatted.title,
+          formatted.message,
+          'error'
+        );
+      })
+      .finally(() => {
+        redirectSettled = true;
+        markReadyIfBothSettled();
+      });
+
+    // 2. Subscribe to continuous auth state changes
+    const unsub = onAuthStateChanged(auth, async (currentUser) => {
+      await verifyAndHandleUser(currentUser, false);
+      authStateSettled = true;
+      markReadyIfBothSettled();
     });
-    return () => unsub();
+
+    return () => {
+      isMounted = false;
+      unsub();
+    };
   }, []);
 
   // Load & sync collections from Firestore, automatically deleting any demo records while preserving genuine user-created content
@@ -542,19 +708,55 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [authLoading, isVerifiedCloudAdmin, user]);
 
   const signInAdmin = async () => {
+    if (signingInRef.current || isSigningIn) {
+      return;
+    }
+
+    signingInRef.current = true;
+    setIsSigningIn(true);
+    setAuthError(null);
+
     try {
-      await signInWithPopup(auth, googleProvider);
-      addToast('Signed in successfully', 'Connected to Firebase Authentication.');
+      try {
+        sessionStorage.setItem(REDIRECT_PENDING_KEY, '1');
+      } catch {
+        // ignore storage errors
+      }
+      sharedRedirectResultPromise = null;
+      await setPersistence(auth, browserLocalPersistence);
+      await signInWithRedirect(auth, googleProvider);
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Could not complete Google Sign-In.';
-      addToast('Sign-In Notice', msg, 'error');
+      try {
+        sessionStorage.removeItem(REDIRECT_PENDING_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      signingInRef.current = false;
+      setIsSigningIn(false);
+
+      const formatted = formatAuthErrorMessage(error);
+      setAuthError(formatted.message);
+      notifyAuthOnce(
+        `signin-err-${formatted.title}-${formatted.message}`,
+        formatted.title,
+        formatted.message,
+        'error'
+      );
     }
   };
 
   const signOutAdmin = async () => {
     try {
+      try {
+        sessionStorage.removeItem(REDIRECT_PENDING_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      setAuthError(null);
+      setIsSigningIn(false);
+      signingInRef.current = false;
       await signOut(auth);
-      addToast('Signed out', 'You have exited the Admin Dashboard.', 'info');
+      notifyAuthOnce('signout-info', 'Signed out', 'You have exited the Admin Dashboard.', 'info');
     } catch (error) {
       console.error(error);
     }
@@ -870,6 +1072,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         isAdmin,
         authLoading,
+        isSigningIn,
+        authError,
         dataLoading,
         blogs,
         publishedBlogs,
@@ -882,6 +1086,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         toasts,
         signInAdmin,
         signOutAdmin,
+        clearAuthError,
         saveBlog,
         deleteBlog,
         toggleBlogStatus,

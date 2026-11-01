@@ -2,5 +2,7 @@
   "name": "LearnWithMe — Personal CS Learning Journal & Publication",
   "description": "Learn. Create. Share. Grow. A warm editorial personal learning blog and computer science publication documenting weekly programming tutorials, data structures, algorithms, and projects.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

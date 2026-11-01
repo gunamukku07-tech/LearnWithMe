@@ -51,8 +51,12 @@ export const AdminDashboardPage: React.FC = () => {
   const {
     user,
     isAdmin,
+    authLoading,
+    isSigningIn,
+    authError,
     signInAdmin,
     signOutAdmin,
+    clearAuthError,
     blogs,
     publishedBlogs,
     categories,
@@ -252,13 +256,15 @@ export const AdminDashboardPage: React.FC = () => {
         .map((k) => k.trim())
         .filter(Boolean),
       authorName: profile.name,
-      authorId: user?.uid || 'sample-admin',
+      authorId: user?.uid || 'admin',
     });
 
     setActiveTab('articles');
   };
 
   if (!isAdmin) {
+    const isBusy = authLoading || isSigningIn;
+
     return (
       <div className="min-h-[82vh] bg-[#FFF8EF] flex items-center justify-center px-6 py-16">
         <SEOHead
@@ -289,14 +295,52 @@ export const AdminDashboardPage: React.FC = () => {
             </p>
           </div>
 
+          {authError && (
+            <div
+              role="alert"
+              className="text-left space-y-2 text-xs text-[#594438] bg-[#F7DDE1]/65 p-4 rounded-xl border border-[#D9A5A5]"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <p className="font-semibold text-[#594438]">Authentication Notice</p>
+                <button
+                  type="button"
+                  onClick={clearAuthError}
+                  className="text-[11px] underline text-[#887467] hover:text-[#594438] cursor-pointer shrink-0"
+                >
+                  Dismiss
+                </button>
+              </div>
+              <p className="leading-relaxed text-[#594438]/90">{authError}</p>
+            </div>
+          )}
+
           <div className="space-y-3 pt-2">
             <button
               type="button"
               onClick={signInAdmin}
-              className="w-full py-3.5 px-6 rounded-xl bg-[#D9A5A5] text-[#594438] font-semibold text-sm hover:bg-[#d19595] transition-all cursor-pointer shadow-xs"
+              disabled={isBusy}
+              className={`w-full py-3.5 px-6 rounded-xl bg-[#D9A5A5] text-[#594438] font-semibold text-sm transition-all shadow-xs inline-flex items-center justify-center gap-2.5 ${
+                isBusy
+                  ? 'opacity-75 cursor-not-allowed'
+                  : 'hover:bg-[#d19595] cursor-pointer'
+              }`}
             >
-              Sign In with Google (Authorized Admin Only)
+              {isBusy ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-[#594438]" />
+                  <span>
+                    {isSigningIn
+                      ? 'Redirecting to Google Sign-In...'
+                      : 'Checking Administrator Session...'}
+                  </span>
+                </>
+              ) : (
+                <span>Sign In with Google (Authorized Admin Only)</span>
+              )}
             </button>
+            <p className="text-[11px] text-[#887467]">
+              Uses secure full-page Google Redirect Sign-In (no popups required).
+            </p>
           </div>
 
           {user && user.email?.toLowerCase() !== ADMIN_EMAIL.toLowerCase() && (
