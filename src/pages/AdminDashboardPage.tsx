@@ -35,7 +35,11 @@ import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { EditorialArtwork } from '../components/EditorialArtwork';
 import { SEOHead } from '../components/SEOHead';
 import { ProfilePhotoPlaceholder } from '../components/ProfilePhotoPlaceholder';
-import { ADMIN_EMAIL, uploadCoverImageToStorage } from '../firebase';
+import {
+  isAuthorizedAdminEmail,
+  isRunningInIframe,
+  uploadCoverImageToStorage,
+} from '../firebase';
 
 type AdminTab = 'overview' | 'articles' | 'editor' | 'categories' | 'projects' | 'profile' | 'inbox';
 
@@ -184,7 +188,7 @@ export const AdminDashboardPage: React.FC = () => {
 
     setUploadingCover(true);
     try {
-      if (user && user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+      if (user && isAuthorizedAdminEmail(user.email)) {
         const downloadUrl = await uploadCoverImageToStorage(file);
         setCoverImage(downloadUrl);
         addToast('Uploaded to Firebase Storage', 'Cover image stored in Firebase Storage.');
@@ -289,9 +293,8 @@ export const AdminDashboardPage: React.FC = () => {
               LearnWithMe Admin Studio
             </h1>
             <p className="text-sm text-[#887467] leading-relaxed">
-              Sign in with the authorized administrator Google account ({ADMIN_EMAIL}) to create
-              and publish weekly articles, manage categories and projects, and update profile
-              details.
+              Sign in with your authorized administrator Google account to manage and publish weekly
+              articles, categories, projects, and profile details.
             </p>
           </div>
 
@@ -330,7 +333,7 @@ export const AdminDashboardPage: React.FC = () => {
                   <Loader2 className="w-4 h-4 animate-spin text-[#594438]" />
                   <span>
                     {isSigningIn
-                      ? 'Redirecting to Google Sign-In...'
+                      ? 'Connecting to Google Sign-In...'
                       : 'Checking Administrator Session...'}
                   </span>
                 </>
@@ -338,16 +341,32 @@ export const AdminDashboardPage: React.FC = () => {
                 <span>Sign In with Google (Authorized Admin Only)</span>
               )}
             </button>
-            <p className="text-[11px] text-[#887467]">
-              Uses secure full-page Google Redirect Sign-In (no popups required).
-            </p>
+            {isRunningInIframe() ? (
+              <div className="pt-1 space-y-1.5">
+                <a
+                  href={typeof window !== 'undefined' ? window.location.href : '/admin'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center gap-1.5 text-xs font-medium text-[#594438] underline hover:text-[#887467] transition-colors"
+                >
+                  <span>Open Admin Portal in New Tab (Full-Page Redirect Sign-In)</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </a>
+                <p className="text-[11px] text-[#887467]">
+                  Opening in a full browser tab enables popup-free Google Redirect Sign-In.
+                </p>
+              </div>
+            ) : (
+              <p className="text-[11px] text-[#887467]">
+                Uses secure full-page Google Redirect Sign-In (no popups required).
+              </p>
+            )}
           </div>
 
-          {user && user.email?.toLowerCase() !== ADMIN_EMAIL.toLowerCase() && (
+          {user && !isAuthorizedAdminEmail(user.email) && (
             <div className="space-y-2 text-xs text-[#594438] bg-[#F7DDE1]/60 p-4 rounded-xl border border-[#D9A5A5]">
               <p className="font-medium">
-                Signed in as {user.email}. Access is restricted exclusively to the authorized
-                administrator ({ADMIN_EMAIL}).
+                Access is restricted exclusively to the authorized administrator Google account.
               </p>
               <button
                 type="button"

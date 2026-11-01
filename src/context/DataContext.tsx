@@ -2,10 +2,9 @@ import React, { createContext, useContext, useEffect, useRef, useState } from 'r
 import {
   User as FirebaseUser,
   UserCredential,
-  browserLocalPersistence,
   getRedirectResult,
   onAuthStateChanged,
-  setPersistence,
+  signInWithPopup,
   signInWithRedirect,
   signOut,
 } from 'firebase/auth';
@@ -25,6 +24,8 @@ import {
   googleProvider,
   ADMIN_EMAIL,
   isAuthorizedAdminEmail,
+  isRunningInIframe,
+  isTokenServiceDisabledError,
   formatAuthErrorMessage,
   OperationType,
   handleFirestoreError,
@@ -64,6 +65,7 @@ interface DataContextType {
   bookmarkedSlugs: string[];
   toasts: ToastNotification[];
   signInAdmin: () => Promise<void>;
+  signInAdminWithRedirect: () => Promise<void>;
   signOutAdmin: () => Promise<void>;
   clearAuthError: () => void;
   saveBlog: (blog: Omit<Blog, 'id'> & { id?: string }) => Promise<Blog>;
@@ -228,6 +230,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           !parsed.roleTitle || parsed.roleTitle.includes('Computer Science Student')
             ? 'Integrated M.Tech CSE — 2nd Year'
             : parsed.roleTitle,
+        email:
+          !parsed.email ||
+          parsed.email.includes('example.com') ||
+          isAuthorizedAdminEmail(parsed.email)
+            ? ''
+            : parsed.email,
       };
     } catch {
       return INITIAL_PROFILE;
@@ -276,7 +284,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     type: 'success' | 'error' | 'info' = 'success'
   ) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setToasts((prev) => [...prev, { id, title, description, type }]);
+    setToasts((prev) => {
+      // Prevent duplicate identical toasts from stacking on screen
+      const filtered = prev.filter(
+        (t) => !(t.title === title && (t.description || '') === (description || ''))
+      );
+      return [...filtered, { id, title, description, type }];
+    });
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4200);
@@ -381,6 +395,33 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
+      // Ensure the Firebase Token Service API can issue/refresh a valid ID token before
+      // setting the user or allowing Firestore to attach the token to requests.
+      try {
+        await currentUser.getIdToken();
+      } catch (tokenErr) {
+        clearPendingFlag();
+        const formatted = formatAuthErrorMessage(tokenErr);
+        if (isMounted) {
+          setUser(null);
+          setAuthError(formatted.message);
+          setIsSigningIn(false);
+          signingInRef.current = false;
+        }
+        notifyAuthOnce(
+          `token-err-${formatted.title}`,
+          formatted.title,
+          formatted.message,
+          'error'
+        );
+        try {
+          await signOut(auth);
+        } catch {
+          // ignore signOut errors
+        }
+        return;
+      }
+
       if (currentUser.emailVerified && isAuthorizedAdminEmail(currentUser.email)) {
         if (isMounted) {
           setUser(currentUser);
@@ -392,7 +433,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           notifyAuthOnce(
             `signin-success-${currentUser.uid}`,
             'Signed in successfully',
-            `Authenticated as ${currentUser.email}.`,
+            'Authenticated with your authorized administrator Google account.',
             'success'
           );
         }
@@ -413,11 +454,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } else {
         // Unauthorized Google account or unverified email: enforce strict admin restriction
-        const attemptedEmail = currentUser.email || 'this Google account';
+        const attemptedKey = (currentUser.email || 'unauthorized').toLowerCase();
         clearPendingFlag();
         const unauthorizedMessage = !currentUser.emailVerified
-          ? `The Google account (${attemptedEmail}) does not have a verified email address. Please sign in with verified administrator account ${ADMIN_EMAIL}.`
-          : `Access denied for ${attemptedEmail}. Only the authorized administrator (${ADMIN_EMAIL}) is allowed to access the LearnWithMe Admin Studio.`;
+          ? 'This Google account does not have a verified email address. Please sign in with your verified authorized administrator Google account.'
+          : 'Access denied. Only the authorized administrator Google account is allowed to access the LearnWithMe Admin Studio.';
 
         if (isMounted) {
           setUser(null);
@@ -427,7 +468,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         notifyAuthOnce(
-          `unauthorized-${attemptedEmail.toLowerCase()}`,
+          `unauthorized-${attemptedKey}`,
           'Unauthorized Account',
           unauthorizedMessage,
           'error'
@@ -599,7 +640,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               linkedinUrl: remoteProf.linkedinUrl?.includes('your-profile')
                 ? ''
                 : remoteProf.linkedinUrl || '',
-              email: remoteProf.email?.includes('example.com') ? '' : remoteProf.email || '',
+              email:
+                !remoteProf.email ||
+                remoteProf.email.includes('example.com') ||
+                isAuthorizedAdminEmail(remoteProf.email)
+                  ? ''
+                  : remoteProf.email,
             }));
           } else if (isVerifiedCloudAdmin) {
             const {
@@ -658,7 +704,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           });
         }
       } catch (err) {
-        console.warn('Using local state:', err);
+        if (isTokenServiceDisabledError(err)) {
+          const formatted = formatAuthErrorMessage(err);
+          if (isMounted) {
+            setUser(null);
+            setAuthError(formatted.message);
+          }
+          await signOut(auth).catch(() => {});
+        } else {
+          console.warn('Using local state:', err);
+        }
       } finally {
         if (isMounted) {
           setDataLoading(false);
@@ -681,6 +736,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setSubscribers(list);
         },
         (err) => {
+          if (isTokenServiceDisabledError(err)) {
+            signOut(auth).catch(() => {});
+            return;
+          }
           handleFirestoreError(err, OperationType.LIST, 'subscribers');
         }
       );
@@ -695,6 +754,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setMessages(list.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
         },
         (err) => {
+          if (isTokenServiceDisabledError(err)) {
+            signOut(auth).catch(() => {});
+            return;
+          }
           handleFirestoreError(err, OperationType.LIST, 'contact_messages');
         }
       );
@@ -707,7 +770,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [authLoading, isVerifiedCloudAdmin, user]);
 
-  const signInAdmin = async () => {
+  const signInAdminWithRedirect = async () => {
     if (signingInRef.current || isSigningIn) {
       return;
     }
@@ -723,7 +786,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // ignore storage errors
       }
       sharedRedirectResultPromise = null;
-      await setPersistence(auth, browserLocalPersistence);
+      // Call signInWithRedirect synchronously without any preceding await
       await signInWithRedirect(auth, googleProvider);
     } catch (error) {
       try {
@@ -733,6 +796,61 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       signingInRef.current = false;
       setIsSigningIn(false);
+
+      const formatted = formatAuthErrorMessage(error);
+      setAuthError(formatted.message);
+      notifyAuthOnce(
+        `signin-err-${formatted.title}-${formatted.message}`,
+        formatted.title,
+        formatted.message,
+        'error'
+      );
+    }
+  };
+
+  const signInAdmin = async () => {
+    if (signingInRef.current || isSigningIn) {
+      return;
+    }
+
+    // On top-level deployments (such as Vercel or a standalone browser tab),
+    // use full-page signInWithRedirect() so popup blockers never interfere.
+    if (!isRunningInIframe()) {
+      await signInAdminWithRedirect();
+      return;
+    }
+
+    // Inside an embedded preview iframe (where accounts.google.com forbids iframe redirects
+    // via X-Frame-Options: DENY), invoke signInWithPopup synchronously on the click gesture
+    // with zero preceding awaits so the browser preserves user activation.
+    signingInRef.current = true;
+    setIsSigningIn(true);
+    setAuthError(null);
+
+    try {
+      const credential = await signInWithPopup(auth, googleProvider);
+      if (credential?.user) {
+        await credential.user.getIdToken();
+        if (credential.user.emailVerified && isAuthorizedAdminEmail(credential.user.email)) {
+          setUser(credential.user);
+          setAuthError(null);
+          notifyAuthOnce(
+            `signin-success-${credential.user.uid}`,
+            'Signed in successfully',
+            'Authenticated with your authorized administrator Google account.',
+            'success'
+          );
+        }
+      }
+      signingInRef.current = false;
+      setIsSigningIn(false);
+    } catch (error) {
+      signingInRef.current = false;
+      setIsSigningIn(false);
+
+      if (isTokenServiceDisabledError(error)) {
+        await signOut(auth).catch(() => {});
+      }
 
       const formatted = formatAuthErrorMessage(error);
       setAuthError(formatted.message);
@@ -1085,6 +1203,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         bookmarkedSlugs,
         toasts,
         signInAdmin,
+        signInAdminWithRedirect,
         signOutAdmin,
         clearAuthError,
         saveBlog,

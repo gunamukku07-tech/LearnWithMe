@@ -1,5 +1,11 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import {
+  browserLocalPersistence,
+  getAuth,
+  GoogleAuthProvider,
+  setPersistence,
+  signOut,
+} from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import firebaseAppletConfig from '../firebase-applet-config.json';
@@ -28,10 +34,38 @@ googleProvider.setCustomParameters({
   prompt: 'select_account',
 });
 
+// Configure local persistence once at startup so click handlers remain synchronous
+// and preserve browser user-gesture activation for popup/redirect flows.
+setPersistence(auth, browserLocalPersistence).catch((err) => {
+  console.warn('Could not set auth persistence:', err);
+});
+
+export function isRunningInIframe(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
+
 export const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || 'guna.chinnu07@gmail.com';
 
 export function isAuthorizedAdminEmail(email: string | null | undefined): boolean {
   return Boolean(email && email.trim().toLowerCase() === ADMIN_EMAIL.trim().toLowerCase());
+}
+
+export function isTokenServiceDisabledError(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : '';
+  const rawMessage = error instanceof Error ? error.message : String(error || '');
+  const combined = `${code} ${rawMessage}`.toLowerCase();
+  return (
+    combined.includes('token-service-api-has-not-been-used') ||
+    combined.includes('securetoken.googleapis.com')
+  );
 }
 
 export function formatAuthErrorMessage(error: unknown): { title: string; message: string } {
@@ -41,11 +75,26 @@ export function formatAuthErrorMessage(error: unknown): { title: string; message
       : '';
   const rawMessage = error instanceof Error ? error.message : String(error || '');
 
-  if (code === 'auth/popup-blocked' || rawMessage.includes('auth/popup-blocked')) {
+  if (isTokenServiceDisabledError(error)) {
+    const projectNumber = firebaseConfig.messagingSenderId || '795945975963';
     return {
-      title: 'Sign-In Redirecting',
+      title: 'Token Service API Disabled in Google Cloud',
+      message: `The Firebase Token Service API (securetoken.googleapis.com) is currently disabled in project ${projectNumber} (${firebaseConfig.projectId}). Please enable it at https://console.developers.google.com/apis/api/securetoken.googleapis.com/overview?project=${projectNumber} and wait 1–2 minutes before signing in again.`,
+    };
+  }
+
+  if (code === 'auth/popup-blocked' || rawMessage.includes('auth/popup-blocked')) {
+    if (isRunningInIframe()) {
+      return {
+        title: 'Popup Blocked by Browser',
+        message:
+          'Your browser blocked the Google Sign-In popup inside this embedded preview. Please allow popups in your browser address bar for this site, or click "Open Admin Portal in New Tab" below to sign in via full-page redirect.',
+      };
+    }
+    return {
+      title: 'Switching to Redirect Sign-In',
       message:
-        'Your browser blocked the sign-in popup window. Please use the redirect sign-in flow or allow popups/redirects for this site.',
+        'Your browser blocked the sign-in popup window. Click "Sign In via Full-Page Redirect" below or allow popups/redirects for this site.',
     };
   }
 
@@ -171,12 +220,34 @@ export function handleFirestoreError(
 
 async function testConnection() {
   try {
+    await auth.authStateReady();
+    if (auth.currentUser) {
+      try {
+        await auth.currentUser.getIdToken();
+      } catch (tokenErr) {
+        if (isTokenServiceDisabledError(tokenErr)) {
+          await signOut(auth).catch(() => {});
+        }
+      }
+    }
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
+    if (isTokenServiceDisabledError(error)) {
+      await signOut(auth).catch(() => {});
+      return;
+    }
+    if (auth.currentUser && error instanceof Error && error.message.includes('the client is offline')) {
+      try {
+        await auth.currentUser.getIdToken(true);
+      } catch (tokenErr) {
+        if (isTokenServiceDisabledError(tokenErr)) {
+          await signOut(auth).catch(() => {});
+        }
+      }
     }
   }
 }
 
 testConnection();
+
+
