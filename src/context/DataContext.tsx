@@ -4,6 +4,7 @@ import {
   UserCredential,
   getRedirectResult,
   onAuthStateChanged,
+  signInWithPopup,
   signInWithRedirect,
   signOut,
 } from 'firebase/auth';
@@ -28,7 +29,7 @@ import {
   isTokenServiceDisabledError,
   formatAuthErrorMessage,
   persistenceReadyPromise,
-  signInWithGooglePopupSynchronously,
+  popupResolverReadyPromise,
   OperationType,
   handleFirestoreError,
 } from '../firebase';
@@ -359,6 +360,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let isMounted = true;
     let authStateSettled = false;
     let redirectSettled = false;
+    let popupResolverSettled = false;
 
     const clearPendingFlag = () => {
       try {
@@ -376,13 +378,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
-    const markReadyIfBothSettled = () => {
-      if (isMounted && authStateSettled && redirectSettled) {
+    const markReadyIfAllSettled = () => {
+      if (isMounted && authStateSettled && redirectSettled && popupResolverSettled) {
         setAuthLoading(false);
         setIsSigningIn(false);
         signingInRef.current = false;
       }
     };
+
+    popupResolverReadyPromise.finally(() => {
+      popupResolverSettled = true;
+      markReadyIfAllSettled();
+    });
 
     const verifyAndHandleUser = async (
       currentUser: FirebaseUser | null,
@@ -396,7 +403,31 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (isAuthorizedAdminUser(currentUser)) {
-        // Immediately grant Admin Dashboard access once the authorized admin account is verified
+        try {
+          await currentUser.getIdToken();
+        } catch (tokenErr) {
+          if (isTokenServiceDisabledError(tokenErr)) {
+            clearPendingFlag();
+            const formatted = formatAuthErrorMessage(tokenErr);
+            if (isMounted) {
+              setUser(null);
+              setAuthError(formatted.message);
+              setAuthLoading(false);
+              setIsSigningIn(false);
+              signingInRef.current = false;
+            }
+            notifyAuthOnce(
+              `token-err-${formatted.title}`,
+              formatted.title,
+              formatted.message,
+              'error'
+            );
+            await signOut(auth).catch(() => {});
+            return;
+          }
+        }
+
+        // Grant Admin Dashboard access only after Firebase Auth token and authorized admin email checks pass
         if (isMounted) {
           setUser(currentUser);
           setAuthError(null);
@@ -413,27 +444,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             'Authenticated with your authorized administrator Google account.',
             'success'
           );
-        }
-
-        try {
-          await currentUser.getIdToken();
-        } catch (tokenErr) {
-          if (isTokenServiceDisabledError(tokenErr)) {
-            clearPendingFlag();
-            const formatted = formatAuthErrorMessage(tokenErr);
-            if (isMounted) {
-              setUser(null);
-              setAuthError(formatted.message);
-            }
-            notifyAuthOnce(
-              `token-err-${formatted.title}`,
-              formatted.title,
-              formatted.message,
-              'error'
-            );
-            await signOut(auth).catch(() => {});
-          }
-          return;
         }
 
         try {
@@ -513,14 +523,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       })
       .finally(() => {
         redirectSettled = true;
-        markReadyIfBothSettled();
+        markReadyIfAllSettled();
       });
 
     // 2. Subscribe to continuous auth state changes
     const unsub = onAuthStateChanged(auth, async (currentUser) => {
       await verifyAndHandleUser(currentUser, false);
       authStateSettled = true;
-      markReadyIfBothSettled();
+      markReadyIfAllSettled();
     });
 
     return () => {
@@ -818,70 +828,68 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
+    // Call signInWithPopup synchronously on the very first line of the click handler
+    // (before any await or React state re-render) so transient user activation is preserved.
+    const popupPromise = signInWithPopup(auth, googleProvider);
     signingInRef.current = true;
-    try {
-      sessionStorage.removeItem(REDIRECT_PENDING_KEY);
-    } catch {
-      // ignore storage errors
-    }
-
-    // Open the OAuth popup window synchronously on the very first line of the click gesture
-    // before any React state update or async GAPI initialization so popup blockers never trigger.
-    const popupPromise = signInWithGooglePopupSynchronously();
     setIsSigningIn(true);
     setAuthError(null);
 
     try {
       const credential = await popupPromise;
-      if (credential?.user) {
-        if (isAuthorizedAdminUser(credential.user)) {
-          setUser(credential.user);
-          setAuthError(null);
-          setAuthLoading(false);
-          setIsSigningIn(false);
-          signingInRef.current = false;
-          notifyAuthOnce(
-            `signin-success-${credential.user.uid}`,
-            'Signed in successfully',
-            'Authenticated with your authorized administrator Google account.',
-            'success'
+      const signedInUser = credential.user;
+
+      if (isAuthorizedAdminUser(signedInUser)) {
+        await signedInUser.getIdToken();
+        setUser(signedInUser);
+        setAuthError(null);
+        setAuthLoading(false);
+        setIsSigningIn(false);
+        signingInRef.current = false;
+
+        notifyAuthOnce(
+          `signin-success-${signedInUser.uid}`,
+          'Signed in successfully',
+          'Authenticated with your authorized administrator Google account.',
+          'success'
+        );
+
+        try {
+          const resolvedEmail = getUserEmail(signedInUser) || ADMIN_EMAIL;
+          await setDoc(
+            doc(db, 'users', signedInUser.uid),
+            {
+              email: resolvedEmail.slice(0, 200),
+              displayName: (signedInUser.displayName || 'Guna Sekhar').slice(0, 120),
+              role: 'admin',
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
           );
-          try {
-            const resolvedEmail = getUserEmail(credential.user) || ADMIN_EMAIL;
-            await setDoc(
-              doc(db, 'users', credential.user.uid),
-              {
-                email: resolvedEmail.slice(0, 200),
-                displayName: (credential.user.displayName || 'Guna Sekhar').slice(0, 120),
-                role: 'admin',
-                updatedAt: new Date().toISOString(),
-              },
-              { merge: true }
-            );
-          } catch (err) {
-            console.warn('Could not sync user record:', err);
-          }
-          return;
-        } else {
-          const attemptedKey = (getUserEmail(credential.user) || 'unauthorized').toLowerCase();
-          const unauthorizedMessage =
-            'Access denied. Only the authorized administrator Google account is allowed to access the LearnWithMe Admin Studio.';
-          setUser(null);
-          setAuthError(unauthorizedMessage);
-          setIsSigningIn(false);
-          signingInRef.current = false;
-          notifyAuthOnce(
-            `unauthorized-${attemptedKey}`,
-            'Unauthorized Account',
-            unauthorizedMessage,
-            'error'
-          );
-          await signOut(auth).catch(() => {});
-          return;
+        } catch (err) {
+          console.warn('Could not sync user record:', err);
         }
+      } else {
+        const attemptedKey = (getUserEmail(signedInUser) || 'unauthorized').toLowerCase();
+        const unauthorizedMessage =
+          signedInUser.emailVerified === false
+            ? 'This Google account does not have a verified email address. Please sign in with your verified authorized administrator Google account.'
+            : 'Access denied. Only the authorized administrator Google account is allowed to access the LearnWithMe Admin Studio.';
+
+        setUser(null);
+        setAuthError(unauthorizedMessage);
+        setIsSigningIn(false);
+        signingInRef.current = false;
+
+        notifyAuthOnce(
+          `unauthorized-${attemptedKey}`,
+          'Unauthorized Account',
+          unauthorizedMessage,
+          'error'
+        );
+
+        await signOut(auth).catch(() => {});
       }
-      signingInRef.current = false;
-      setIsSigningIn(false);
     } catch (error) {
       signingInRef.current = false;
       setIsSigningIn(false);
