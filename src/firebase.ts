@@ -4,7 +4,9 @@ import {
   getAuth,
   GoogleAuthProvider,
   setPersistence,
+  signInWithPopup,
   signOut,
+  UserCredential,
 } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -44,6 +46,108 @@ export const persistenceReadyPromise: Promise<void> = setPersistence(
 ).catch((err) => {
   console.warn('Could not set auth persistence:', err);
 });
+
+// Proactively initialize Firebase Auth's hidden GAPI iframe & origin check on desktop browsers
+// so signInWithPopup does not stall for 1-3 seconds downloading apis.google.com/js/api.js on first click.
+export const popupResolverReadyPromise: Promise<void> = (async () => {
+  if (typeof window === 'undefined') return;
+  try {
+    await persistenceReadyPromise;
+    const internalAuth = auth as unknown as {
+      _initializationPromise?: Promise<unknown>;
+      _popupRedirectResolver?: {
+        _initialize?: (authInstance: unknown) => Promise<unknown>;
+        _originValidation?: (authInstance: unknown) => Promise<unknown>;
+      };
+    };
+    if (internalAuth._initializationPromise) {
+      await internalAuth._initializationPromise;
+    }
+    if (internalAuth._popupRedirectResolver?._initialize) {
+      await internalAuth._popupRedirectResolver._initialize(auth);
+    }
+    if (internalAuth._popupRedirectResolver?._originValidation) {
+      await internalAuth._popupRedirectResolver._originValidation(auth);
+    }
+  } catch (err) {
+    console.warn('Could not pre-initialize auth popup resolver:', err);
+  }
+})();
+
+/**
+ * Opens the OAuth popup window synchronously on the first line of the user's click event
+ * (before any async/await or GAPI network calls), then hands the open window to Firebase's
+ * signInWithPopup so Chrome/Safari/Edge popup blockers never block the login flow.
+ */
+export async function signInWithGooglePopupSynchronously(): Promise<UserCredential> {
+  if (typeof window === 'undefined') {
+    return signInWithPopup(auth, googleProvider);
+  }
+
+  const width = 500;
+  const height = 600;
+  const top = Math.max((window.screen.availHeight - height) / 2, 0);
+  const left = Math.max((window.screen.availWidth - width) / 2, 0);
+  const popupFeatures = `location=yes,resizable=yes,statusbar=yes,toolbar=no,scrollbars=yes,width=${width},height=${height},top=${top},left=${left}`;
+
+  const originalWindowOpen = window.open.bind(window);
+  let preOpenedWin: Window | null = null;
+
+  try {
+    preOpenedWin = originalWindowOpen('about:blank', '_blank', popupFeatures);
+    if (preOpenedWin && !preOpenedWin.closed) {
+      try {
+        preOpenedWin.document.title = 'Sign in with Google — LearnWithMe';
+        preOpenedWin.document.body.innerHTML =
+          '<div style="font-family:system-ui,-apple-system,sans-serif;background:#FFF8EF;color:#594438;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;"><div><p style="font-size:16px;font-weight:600;margin:0 0 8px;">Connecting to Google Sign-In…</p><p style="font-size:13px;color:#887467;margin:0;">Please wait a moment.</p></div></div>';
+      } catch {
+        // Ignore cross-origin or document write restrictions
+      }
+    }
+  } catch {
+    preOpenedWin = null;
+  }
+
+  let intercepted = false;
+  if (preOpenedWin && !preOpenedWin.closed) {
+    window.open = ((url?: string | URL, target?: string, features?: string): Window | null => {
+      const urlStr = url ? String(url) : '';
+      if (!intercepted && preOpenedWin && !preOpenedWin.closed) {
+        intercepted = true;
+        window.open = originalWindowOpen;
+        if (urlStr) {
+          try {
+            preOpenedWin.location.replace(urlStr);
+          } catch {
+            preOpenedWin.location.href = urlStr;
+          }
+        }
+        try {
+          preOpenedWin.focus();
+        } catch {
+          // ignore
+        }
+        return preOpenedWin;
+      }
+      return originalWindowOpen(url, target, features);
+    }) as typeof window.open;
+  }
+
+  try {
+    return await signInWithPopup(auth, googleProvider);
+  } catch (err) {
+    if (preOpenedWin && !preOpenedWin.closed) {
+      try {
+        preOpenedWin.close();
+      } catch {
+        // ignore
+      }
+    }
+    throw err;
+  } finally {
+    window.open = originalWindowOpen;
+  }
+}
 
 export function isRunningInIframe(): boolean {
   if (typeof window === 'undefined') return false;
@@ -129,13 +233,13 @@ export function formatAuthErrorMessage(error: unknown): { title: string; message
       return {
         title: 'Popup Blocked by Browser',
         message:
-          'Your browser blocked the Google Sign-In popup inside this embedded preview. Please allow popups in your browser address bar for this site, or click "Open Admin Portal in New Tab" below to sign in via full-page redirect.',
+          'Your browser blocked the Google Sign-In popup inside this embedded preview. Please allow popups in your browser address bar for this site, or click "Open Admin Portal in New Tab" below.',
       };
     }
     return {
-      title: 'Switching to Redirect Sign-In',
+      title: 'Popup Blocked by Browser',
       message:
-        'Your browser blocked the sign-in popup window. Click "Sign In via Full-Page Redirect" below or allow popups/redirects for this site.',
+        'Your browser blocked the Google Sign-In window. Please click the popup-blocked icon on the right side of your browser address bar, select "Always allow pop-ups and redirects", and click "Sign In with Google" again.',
     };
   }
 

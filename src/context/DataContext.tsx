@@ -4,7 +4,6 @@ import {
   UserCredential,
   getRedirectResult,
   onAuthStateChanged,
-  signInWithPopup,
   signInWithRedirect,
   signOut,
 } from 'firebase/auth';
@@ -26,10 +25,10 @@ import {
   getUserEmail,
   isAuthorizedAdminEmail,
   isAuthorizedAdminUser,
-  isRunningInIframe,
   isTokenServiceDisabledError,
   formatAuthErrorMessage,
   persistenceReadyPromise,
+  signInWithGooglePopupSynchronously,
   OperationType,
   handleFirestoreError,
 } from '../firebase';
@@ -483,7 +482,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
-    // 1. Handle redirect result from signInWithRedirect()
+    // 1. Handle redirect result from signInWithRedirect() if any
     consumeRedirectResultOnce()
       .then(async (result) => {
         if (result?.user) {
@@ -495,11 +494,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           await verifyAndHandleUser(auth.currentUser, hadPendingRedirect());
         } else if (hadPendingRedirect()) {
           clearPendingFlag();
-          const redirectBlockedMsg =
-            'Full-page redirect sign-in could not restore your session because your browser blocked cross-domain authentication storage. Please click "Sign In with Google (Authorized Admin Only)" below to sign in directly.';
-          if (isMounted) {
-            setAuthError(redirectBlockedMsg);
-          }
         }
       })
       .catch((error) => {
@@ -824,15 +818,21 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    // Invoke signInWithPopup synchronously on the click gesture with zero preceding awaits
-    // so both standalone deployments (Vercel / Cloud Run) and embedded previews authenticate
-    // immediately without cross-domain redirect storage partitioning losing the session.
     signingInRef.current = true;
+    try {
+      sessionStorage.removeItem(REDIRECT_PENDING_KEY);
+    } catch {
+      // ignore storage errors
+    }
+
+    // Open the OAuth popup window synchronously on the very first line of the click gesture
+    // before any React state update or async GAPI initialization so popup blockers never trigger.
+    const popupPromise = signInWithGooglePopupSynchronously();
     setIsSigningIn(true);
     setAuthError(null);
 
     try {
-      const credential = await signInWithPopup(auth, googleProvider);
+      const credential = await popupPromise;
       if (credential?.user) {
         if (isAuthorizedAdminUser(credential.user)) {
           setUser(credential.user);
@@ -885,21 +885,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
       signingInRef.current = false;
       setIsSigningIn(false);
-
-      const code =
-        typeof error === 'object' && error !== null && 'code' in error
-          ? String((error as { code?: unknown }).code || '')
-          : '';
-      const rawMessage = error instanceof Error ? error.message : String(error || '');
-
-      // If a browser popup blocker prevented the popup in a standalone tab, fall back to redirect
-      if (
-        (code === 'auth/popup-blocked' || rawMessage.includes('auth/popup-blocked')) &&
-        !isRunningInIframe()
-      ) {
-        await signInAdminWithRedirect();
-        return;
-      }
 
       if (isTokenServiceDisabledError(error)) {
         await signOut(auth).catch(() => {});
