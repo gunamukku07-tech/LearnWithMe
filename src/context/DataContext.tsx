@@ -29,7 +29,7 @@ import {
   isTokenServiceDisabledError,
   formatAuthErrorMessage,
   persistenceReadyPromise,
-  popupResolverReadyPromise,
+  preOpenGoogleAuthPopup,
   OperationType,
   handleFirestoreError,
 } from '../firebase';
@@ -360,7 +360,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let isMounted = true;
     let authStateSettled = false;
     let redirectSettled = false;
-    let popupResolverSettled = false;
 
     const clearPendingFlag = () => {
       try {
@@ -379,17 +378,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const markReadyIfAllSettled = () => {
-      if (isMounted && authStateSettled && redirectSettled && popupResolverSettled) {
+      if (isMounted && authStateSettled && redirectSettled) {
         setAuthLoading(false);
         setIsSigningIn(false);
         signingInRef.current = false;
       }
     };
-
-    popupResolverReadyPromise.finally(() => {
-      popupResolverSettled = true;
-      markReadyIfAllSettled();
-    });
 
     const verifyAndHandleUser = async (
       currentUser: FirebaseUser | null,
@@ -828,8 +822,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    // Call signInWithPopup synchronously on the very first line of the click handler
-    // (before any await or React state re-render) so transient user activation is preserved.
+    // 1. Open the popup window synchronously on line 1 of the click event (0 awaits)
+    // so desktop browsers never block window.open() while Firebase resolves _initialize() and _getRedirectUrl().
+    const cleanupPreOpenedPopup = preOpenGoogleAuthPopup();
+
+    // 2. Start Firebase's official signInWithPopup flow immediately, which will adopt the pre-opened window.
     const popupPromise = signInWithPopup(auth, googleProvider);
     signingInRef.current = true;
     setIsSigningIn(true);
@@ -837,6 +834,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     try {
       const credential = await popupPromise;
+      cleanupPreOpenedPopup();
       const signedInUser = credential.user;
 
       if (isAuthorizedAdminUser(signedInUser)) {
@@ -891,6 +889,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await signOut(auth).catch(() => {});
       }
     } catch (error) {
+      cleanupPreOpenedPopup();
       signingInRef.current = false;
       setIsSigningIn(false);
 

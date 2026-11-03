@@ -39,6 +39,20 @@ try {
       get: () => true,
       configurable: true,
     });
+
+    // In @firebase/auth 1.13.8, _isIframeWebStorageSupported calls _fail(auth, 'internal-error')
+    // after invoking cb(!!isSupported), and can reject PopupOperation on desktop browsers with
+    // strict third-party storage partitioning even when window.opener postMessage is active.
+    resolverClass.prototype._isIframeWebStorageSupported = function (
+      _authInstance: unknown,
+      cb: (supported: boolean) => void
+    ) {
+      try {
+        cb(true);
+      } catch {
+        // Ignore callback errors
+      }
+    };
   }
 } catch {
   // Ignore if property cannot be redefined
@@ -65,8 +79,7 @@ export const persistenceReadyPromise: Promise<void> = setPersistence(
 });
 
 // Proactively initialize Firebase Auth's hidden GAPI iframe & origin check on desktop browsers
-// during initial auth loading so signInWithPopup opens window.open() immediately on click
-// without stalling to download apis.google.com/js/api.js inside the click handler.
+// at startup so signInWithPopup is ready as early as possible.
 export const popupResolverReadyPromise: Promise<void> = (async () => {
   if (typeof window === 'undefined') return;
   try {
@@ -81,21 +94,107 @@ export const popupResolverReadyPromise: Promise<void> = (async () => {
     if (internalAuth._initializationPromise) {
       await internalAuth._initializationPromise;
     }
-    await Promise.race([
-      (async () => {
-        if (internalAuth._popupRedirectResolver?._initialize) {
-          await internalAuth._popupRedirectResolver._initialize(auth);
-        }
-        if (internalAuth._popupRedirectResolver?._originValidation) {
-          await internalAuth._popupRedirectResolver._originValidation(auth);
-        }
-      })(),
-      new Promise<void>((resolve) => setTimeout(resolve, 3500)),
-    ]);
+    if (internalAuth._popupRedirectResolver?._initialize) {
+      await internalAuth._popupRedirectResolver._initialize(auth);
+    }
+    if (internalAuth._popupRedirectResolver?._originValidation) {
+      await internalAuth._popupRedirectResolver._originValidation(auth);
+    }
   } catch (err) {
     console.warn('Could not pre-initialize auth popup resolver:', err);
   }
 })();
+
+/**
+ * Synchronously opens the popup window on the very first line of the user's click event
+ * (before Firebase's internal async `await _initialize()` and `await _getRedirectUrl()` hops)
+ * and hands that exact Window instance to Firebase's internal `window.open` call inside `signInWithPopup`.
+ */
+export function preOpenGoogleAuthPopup(): () => void {
+  if (typeof window === 'undefined') {
+    return () => {};
+  }
+
+  const originalWindowOpen = window.open.bind(window);
+  const width = 500;
+  const height = 600;
+  const top = Math.max((window.screen.availHeight - height) / 2, 0);
+  const left = Math.max((window.screen.availWidth - width) / 2, 0);
+  const features = `location=yes,resizable=yes,statusbar=yes,toolbar=no,scrollbars=yes,width=${width},height=${height},top=${top},left=${left}`;
+  const popupName = `firebase_auth_${Date.now()}`;
+
+  let preOpenedWin: Window | null = null;
+  try {
+    preOpenedWin = originalWindowOpen('about:blank', popupName, features);
+    if (!preOpenedWin) {
+      // Fallback for desktop browsers/extensions that block dimensioned popups but allow standard new-tab opens
+      preOpenedWin = originalWindowOpen('about:blank', '_blank');
+    }
+  } catch {
+    preOpenedWin = null;
+  }
+
+  if (!preOpenedWin) {
+    return () => {};
+  }
+
+  try {
+    preOpenedWin.document.open();
+    preOpenedWin.document.write(
+      '<!doctype html><html><head><meta charset="utf-8"><title>Sign in with Google — LearnWithMe</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#FFF8EF;color:#594438;font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:24px}.card{background:#fff;border:1px solid #EDE0D5;border-radius:18px;padding:32px 28px;max-width:360px;box-shadow:0 12px 30px -12px rgba(89,68,56,0.12)}.spinner{width:28px;height:28px;border:3px solid #F7DDE1;border-top-color:#594438;border-radius:50%;margin:0 auto 16px;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}h1{font-size:17px;margin:0 0 8px;font-weight:600}p{font-size:13px;color:#887467;margin:0;line-height:1.5}</style></head><body><div class="card"><div class="spinner"></div><h1>Connecting to Google Sign-In…</h1><p>Please wait a moment while LearnWithMe securely opens Google Authentication.</p></div></body></html>'
+    );
+    preOpenedWin.document.close();
+  } catch {
+    // Ignore if cross-origin restrictions apply
+  }
+
+  let consumedByFirebase = false;
+  let restored = false;
+
+  const restoreWindowOpen = () => {
+    if (!restored) {
+      restored = true;
+      window.open = originalWindowOpen;
+    }
+  };
+
+  window.open = function (
+    url?: string | URL,
+    target?: string,
+    windowFeatures?: string
+  ): Window | null {
+    restoreWindowOpen();
+    if (preOpenedWin && !preOpenedWin.closed) {
+      consumedByFirebase = true;
+      const resolvedUrl = url ? String(url) : '';
+      if (resolvedUrl && resolvedUrl !== 'about:blank') {
+        try {
+          preOpenedWin.location.replace(resolvedUrl);
+        } catch {
+          preOpenedWin.location.href = resolvedUrl;
+        }
+      }
+      try {
+        preOpenedWin.focus();
+      } catch {
+        // Ignore focus errors
+      }
+      return preOpenedWin;
+    }
+    return originalWindowOpen(url, target, windowFeatures);
+  };
+
+  return () => {
+    restoreWindowOpen();
+    if (!consumedByFirebase && preOpenedWin && !preOpenedWin.closed) {
+      try {
+        preOpenedWin.close();
+      } catch {
+        // Ignore close errors
+      }
+    }
+  };
+}
 
 export function isRunningInIframe(): boolean {
   if (typeof window === 'undefined') return false;

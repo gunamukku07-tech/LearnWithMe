@@ -37,6 +37,7 @@ import { SEOHead } from '../components/SEOHead';
 import { ProfilePhotoPlaceholder } from '../components/ProfilePhotoPlaceholder';
 import {
   isAuthorizedAdminUser,
+  isRunningInIframe,
   uploadCoverImageToStorage,
 } from '../firebase';
 
@@ -339,17 +340,19 @@ export const AdminDashboardPage: React.FC = () => {
                 <span>Sign In with Google (Authorized Admin Only)</span>
               )}
             </button>
-            <div className="pt-1 space-y-1.5">
-              <a
-                href={typeof window !== 'undefined' ? window.location.href : '/admin'}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-1.5 text-xs font-medium text-[#594438] underline hover:text-[#887467] transition-colors"
-              >
-                <span>Open Admin Portal in New Tab (Full-Page Redirect Sign-In)</span>
-                <ArrowUpRight className="w-3.5 h-3.5" />
-              </a>
-            </div>
+            {isRunningInIframe() && (
+              <div className="pt-1 space-y-1.5">
+                <a
+                  href={typeof window !== 'undefined' ? window.location.href : '/admin'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center gap-1.5 text-xs font-medium text-[#594438] underline hover:text-[#887467] transition-colors"
+                >
+                  <span>Open Admin Portal in New Tab</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </a>
+              </div>
+            )}
           </div>
 
           {user && !isAuthorizedAdminUser(user) && (
