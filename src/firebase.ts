@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import {
   browserLocalPersistence,
+  browserPopupRedirectResolver,
   getAuth,
   GoogleAuthProvider,
   setPersistence,
@@ -24,6 +25,24 @@ const firebaseConfig = {
     import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID ||
     firebaseAppletConfig.firestoreDatabaseId,
 };
+
+// By default, Firebase Auth only sets _shouldInitProactively = true on mobile/Safari
+// (_isMobileBrowser() || _isSafari() || _isIOS()), leaving desktop Chrome/Edge uninitialized
+// until click time (which causes desktop popup blockers to trip). Enabling it before getAuth()
+// makes desktop browsers initialize the auth iframe proactively just like mobile browsers.
+try {
+  const resolverClass = browserPopupRedirectResolver as unknown as {
+    prototype?: Record<string, unknown>;
+  };
+  if (resolverClass?.prototype) {
+    Object.defineProperty(resolverClass.prototype, '_shouldInitProactively', {
+      get: () => true,
+      configurable: true,
+    });
+  }
+} catch {
+  // Ignore if property cannot be redefined
+}
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
